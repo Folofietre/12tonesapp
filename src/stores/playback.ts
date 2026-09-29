@@ -2,8 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { audioEngine } from '@/audio/engine'
 import { Transport, type PlayPosition } from '@/audio/transport'
-import { midiOf } from '@/lib/music'
-import type { ShapeRef } from '@/lib/project'
+import { midiOf, sameRef, shapeKey, type ShapeRef } from '@/lib/music'
 import { soundingAt } from '@/lib/rhythm'
 import { useProjectStore } from './project'
 
@@ -25,7 +24,7 @@ export const usePlaybackStore = defineStore('playback', () => {
     {
       now: () => audioEngine.now(),
       sequence,
-      shape: (r) => project.getShape(r.split, r.group),
+      shape: (r) => project.getShape(r),
       row: () => project.row,
       bpm: () => project.bpm,
       loop: () => loop.value,
@@ -53,29 +52,29 @@ export const usePlaybackStore = defineStore('playback', () => {
   }
 
   const playingRef = computed<ShapeRef | null>(() => position.value?.ref ?? null)
-  const playingKey = computed(() => (playingRef.value ? `${playingRef.value.split}:${playingRef.value.group}` : ''))
+  const playingKey = computed(() => (playingRef.value ? shapeKey(playingRef.value) : ''))
 
   /** Lane indices of the playing shape that sound right now. */
   const soundingLanes = computed<number[]>(() => {
     const p = position.value
-    return p ? soundingAt(project.getShape(p.ref.split, p.ref.group), p.step) : []
+    return p ? soundingAt(project.getShape(p.ref), p.step) : []
   })
   /** Circle positions sounding right now. */
   const soundingPositions = computed<number[]>(() => {
     const r = playingRef.value
     if (!r) return []
-    const order = project.getShape(r.split, r.group).order
+    const order = project.getShape(r).order
     return soundingLanes.value.map((i) => order[i]!)
   })
 
   function isPlayingShape(r: ShapeRef): boolean {
-    return !!playingRef.value && playingRef.value.split === r.split && playingRef.value.group === r.group
+    return sameRef(playingRef.value, r)
   }
 
   // "Follow playback": show the shape being played
   watch(playingKey, () => {
     const r = playingRef.value
-    if (follow.value && r) project.select(r.split, r.group)
+    if (follow.value && r) project.select(r)
   })
 
   function preview(pc: number, octave: number) {

@@ -1,4 +1,4 @@
-import { CIRCLE_OF_FIFTHS, type PitchClass, type SplitId } from './music'
+import { CIRCLE_OF_FIFTHS, type PitchClass, type ShapeRef } from './music'
 import type { ShapeState } from './rhythm'
 
 export const INSTRUMENTS = ['synth', 'piano', 'guitar-clean', 'guitar-dist'] as const
@@ -14,17 +14,16 @@ export const INSTRUMENT_LABELS: Record<Instrument, string> = {
 export const BPM_MIN = 30
 export const BPM_MAX = 300
 
-export interface ShapeRef {
-  split: SplitId
-  group: number
-}
-
 /** Everything that is saved (autosave and config file). */
 export interface ProjectData {
+  /** optional name shown above the arrangement */
+  title?: string
+  /** optional credits (authors, rights, sources); URLs are shown as links */
+  credits?: string
   bpm: number
   instrument: Instrument
   row: PitchClass[]
-  /** keyed by shapeKey(split, group); only shapes the user touched */
+  /** keyed by shapeKey(ref); only shapes the user touched */
   shapes: Record<string, ShapeState>
   /** bars played one after the other */
   arrangement: ShapeRef[]

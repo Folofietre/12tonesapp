@@ -1,7 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { BEAT, STEPS, noteName, shapeColor, shapeLabel } from '@/lib/music'
-import { DEFAULT_OCTAVE, OCTAVE_MAX, OCTAVE_MIN, type NoteEvent, type OrderPreset, type RhythmPreset } from '@/lib/rhythm'
+import { BEAT, noteName, shapeColor, shapeLabel } from '@/lib/music'
+import {
+  DEFAULT_OCTAVE,
+  OCTAVE_MAX,
+  OCTAVE_MIN,
+  STEPS_MAX,
+  STEPS_MIN,
+  meterLabel,
+  type NoteEvent,
+  type OrderPreset,
+  type RhythmPreset,
+} from '@/lib/rhythm'
 import { useProjectStore } from '@/stores/project'
 import { usePlaybackStore } from '@/stores/playback'
 
@@ -9,17 +19,18 @@ const project = useProjectStore()
 const playback = usePlaybackStore()
 
 const shape = computed(() => project.selectedShape)
-const color = computed(() => shapeColor(project.split, project.group))
+const color = computed(() => shapeColor(project.selectedRef))
 const title = computed(
-  () => `${shapeLabel(project.split, project.group)} (${project.notesOf(project.split, project.group).map(noteName).join(' ')})`,
+  () => `${shapeLabel(project.selectedRef)} (${project.notesOf(project.selectedRef).map(noteName).join(' ')})`,
 )
-const steps = Array.from({ length: STEPS }, (_, i) => i)
+const barSteps = computed(() => shape.value.steps)
+const steps = computed(() => Array.from({ length: barSteps.value }, (_, i) => i))
 
 const isMine = computed(() => playback.isPlayingShape(project.selectedRef))
 const sounding = computed(() => new Set(isMine.value ? playback.soundingLanes : []))
 const playheadLeft = computed(() => {
   const p = playback.position
-  return p && isMine.value ? `${((p.step + p.frac) / STEPS) * 100}%` : null
+  return p && isMine.value ? `${((p.step + p.frac) / barSteps.value) * 100}%` : null
 })
 
 const pcOf = (i: number) => project.row[shape.value.order[i]!]!
@@ -33,6 +44,7 @@ function onPointerDown(e: PointerEvent, i: number) {
   if (e.button !== 0) return
   const cells = e.currentTarget as HTMLElement
   const rect = cells.getBoundingClientRect()
+  const STEPS = barSteps.value
   const cellAt = (x: number) => Math.max(0, Math.min(STEPS - 1, Math.floor(((x - rect.left) / rect.width) * STEPS)))
   const target = e.target as HTMLElement
   const c0 = cellAt(e.clientX)
@@ -84,6 +96,7 @@ async function focusBlock(i: number) {
 function onBlockKey(e: KeyboardEvent, i: number) {
   const n = shape.value.notes[i]
   if (!n) return
+  const STEPS = barSteps.value
   let focus = i
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
     const dir = e.key === 'ArrowUp' ? -1 : 1
@@ -137,23 +150,55 @@ const rhythmPresets: [RhythmPreset, string][] = [
 ]
 
 const blockStyle = (n: NoteEvent) => ({
-  left: `calc(${n.start} / ${STEPS} * 100% + 2px)`,
-  width: `calc(${n.length} / ${STEPS} * 100% - 4px)`,
+  left: `calc(${n.start} / ${barSteps.value} * 100% + 2px)`,
+  width: `calc(${n.length} / ${barSteps.value} * 100% - 4px)`,
 })
+
+// --- bar length
+const barPresets = [8, 12, 16, 20, 24, 28, 32, 40, 44, 48].map((s) => ({ steps: s, label: meterLabel(s) }))
+function onStepsInput(e: Event) {
+  const v = Number((e.target as HTMLInputElement).value)
+  if (Number.isFinite(v)) project.setSteps(v)
+  ;(e.target as HTMLInputElement).value = String(barSteps.value)
+}
+function onPreset(e: Event) {
+  const v = Number((e.target as HTMLSelectElement).value)
+  if (v) project.setSteps(v)
+  ;(e.target as HTMLSelectElement).value = ''
+}
 </script>
 
 <template>
   <section class="panel span-2 editor" aria-labelledby="h-rhythm" :style="{ '--col': color }">
-    <h2 id="h-rhythm">Rhythm <span class="sub">1 bar = 16 sixteenth notes</span></h2>
+    <h2 id="h-rhythm">Rhythm</h2>
     <div class="toolbar head">
       <span class="title">{{ title }}</span>
       <span class="spacer" />
+      <label class="field">
+        Bar
+        <input
+          type="number"
+          :min="STEPS_MIN"
+          :max="STEPS_MAX"
+          :value="barSteps"
+          aria-describedby="bar-meter"
+          @change="onStepsInput"
+        />
+        sixteenths
+      </label>
+      <span id="bar-meter" class="meter">= {{ meterLabel(barSteps) }}</span>
+      <label class="sr-only" for="bar-preset">Bar length preset</label>
+      <select id="bar-preset" class="preset" value="" @change="onPreset">
+        <option value="" disabled>Meter...</option>
+        <option v-for="b in barPresets" :key="b.steps" :value="b.steps">{{ b.label }} ({{ b.steps }})</option>
+      </select>
       <button class="btn small" :aria-pressed="playback.follow" @click="playback.follow = !playback.follow">
         Follow playback
       </button>
     </div>
 
-    <div ref="gridEl" class="grid">
+    <div class="grid-scroll">
+    <div ref="gridEl" class="grid" :style="{ '--steps': barSteps }">
       <div class="ruler" aria-hidden="true">
         <div />
         <div class="cells">
@@ -218,6 +263,7 @@ const blockStyle = (n: NoteEvent) => ({
         <div v-if="playheadLeft" class="playhead" :style="{ left: playheadLeft }" />
       </div>
     </div>
+    </div>
 
     <div class="toolbar foot">
       <span class="field">Order</span>
@@ -236,12 +282,14 @@ const blockStyle = (n: NoteEvent) => ({
 </template>
 
 <style scoped>
-.sub { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.meter { font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 44px; }
+.preset { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 6px; padding: 3px 6px; font-size: 12px; color: var(--muted); }
 .head { margin-bottom: 8px; }
 .title { font-family: var(--mono); font-weight: 600; color: var(--col); }
-.grid { --label: 176px; position: relative; user-select: none; touch-action: none; }
+.grid-scroll { overflow-x: auto; }
+.grid { --label: 176px; position: relative; user-select: none; touch-action: none; min-width: calc(var(--label) + var(--steps) * 12px); }
 .ruler, .lane { display: grid; grid-template-columns: var(--label) 1fr; align-items: center; }
-.cells { position: relative; display: grid; grid-template-columns: repeat(16, 1fr); height: 100%; }
+.cells { position: relative; display: grid; grid-template-columns: repeat(var(--steps), 1fr); height: 100%; }
 .ruler { height: 22px; font-family: var(--mono); font-size: 10px; color: var(--muted); }
 .ruler .cells span { padding-left: 3px; border-left: 1px solid transparent; }
 .ruler .cells span.beat { color: var(--text); border-left-color: var(--line-2); }

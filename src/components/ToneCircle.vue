@@ -3,12 +3,12 @@ import { computed, ref } from 'vue'
 import {
   CHROMATIC,
   CIRCLE_OF_FIFTHS,
-  STEPS,
   BEAT,
   groupPositions,
   noteName,
   parseRow,
   positionLabel,
+  sameRef,
   shapeColor,
   shapeLabel,
 } from '@/lib/music'
@@ -28,21 +28,19 @@ const pt = (pos: number, r = R): [number, number] => {
 const pts = (positions: number[], r = R) => positions.map((p) => pt(p, r).join(',')).join(' ')
 
 const shapes = computed(() =>
-  project.groups.map((g) => ({
-    group: g,
-    positions: groupPositions(project.split, g),
-    color: shapeColor(project.split, g),
-  })),
+  project.layout.map((ref, g) => ({ g, ref, positions: groupPositions(ref), color: shapeColor(ref) })),
 )
-
-/** Shape highlighted: the one playing if it belongs to this split, else the selected one. */
-const activeGroup = computed(() => {
-  const r = playback.playingRef
-  if (r) return r.split === project.split ? r.group : -1
-  return project.group
+/** Color of each position, from the group it belongs to in the current layout. */
+const positionColor = computed(() => {
+  const m = new Map<number, string>()
+  for (const s of shapes.value) for (const p of s.positions) m.set(p, s.color)
+  return m
 })
 
-const selectedColor = computed(() => shapeColor(project.split, project.group))
+/** Shape highlighted: the one playing (if it is in this layout), else the selected one. */
+const activeRef = computed(() => playback.playingRef ?? project.selectedRef)
+
+const selectedColor = computed(() => shapeColor(project.selectedRef))
 const orderIndex = computed(() => new Map(project.selectedShape.order.map((p, i) => [p, i])))
 
 /** Dashed arrows between consecutive notes of the selected shape, stopping at the badges. */
@@ -60,26 +58,29 @@ const orderArrows = computed(() => {
 })
 
 const sounding = computed(() => new Set(playback.soundingPositions))
-const playColor = computed(() => {
-  const r = playback.playingRef
-  return r ? shapeColor(r.split, r.group) : ''
-})
+const playColor = computed(() => (playback.playingRef ? shapeColor(playback.playingRef) : ''))
 
-const ticks = Array.from({ length: STEPS }, (_, i) => {
-  const a = (i / STEPS) * Math.PI * 2 - Math.PI / 2
-  return { i, x: Math.cos(a) * 188, y: Math.sin(a) * 188, rot: (i / STEPS) * 360, beat: i % BEAT === 0 }
+/** One tick per step of the bar being played (or of the selected shape). */
+const ticks = computed(() => {
+  const steps = playback.position?.steps ?? project.selectedShape.steps
+  const w = steps > 32 ? 0.6 : 1
+  return Array.from({ length: steps }, (_, i) => {
+    const a = (i / steps) * Math.PI * 2 - Math.PI / 2
+    const beat = i % BEAT === 0
+    return { i, x: Math.cos(a) * 188, y: Math.sin(a) * 188, rot: (i / steps) * 360, beat, w: (beat ? 5 : 3) * w }
+  })
 })
 const currentStep = computed(() => playback.position?.step ?? -1)
 
 const centerMain = computed(() => {
   const r = playback.playingRef
   if (r && playback.soundingPositions.length) return playback.soundingPositions.map((p) => noteName(project.row[p]!)).join(' ')
-  return shapeLabel(project.split, project.group)
+  return shapeLabel(project.selectedRef)
 })
 const centerSub = computed(() => {
   const r = playback.playingRef
-  if (r && playback.soundingPositions.length) return shapeLabel(r.split, r.group)
-  return project.notesOf(project.split, project.group).map(noteName).join(' ')
+  if (r && playback.soundingPositions.length) return shapeLabel(r)
+  return project.notesOf(project.selectedRef).map(noteName).join(' ')
 })
 
 // --- swapping two notes
@@ -135,9 +136,9 @@ function applyRow() {
         <rect
           v-for="t in ticks"
           :key="t.i"
-          :x="t.beat ? -2.5 : -1.5"
+          :x="-t.w / 2"
           y="-8"
-          :width="t.beat ? 5 : 3"
+          :width="t.w"
           height="16"
           rx="1.5"
           class="tick"
@@ -151,13 +152,13 @@ function applyRow() {
         <component
           :is="s.positions.length === 2 ? 'polyline' : 'polygon'"
           v-for="s in shapes"
-          :key="s.group"
+          :key="s.g"
           :points="pts(s.positions)"
           class="shape"
-          :class="{ active: s.group === activeGroup, dim: s.group !== activeGroup }"
+          :class="{ active: sameRef(s.ref, activeRef), dim: !sameRef(s.ref, activeRef) }"
           :stroke="s.color"
           :fill="s.color"
-          @click="project.select(project.split, s.group)"
+          @click="project.select(s.ref)"
         />
       </g>
 
@@ -189,7 +190,7 @@ function applyRow() {
           :cx="pt(p)[0]"
           :cy="pt(p)[1]"
           :r="sounding.has(p) ? 22 : 17"
-          :style="{ stroke: shapeColor(project.split, p % project.split), fill: sounding.has(p) ? playColor + '44' : undefined }"
+          :style="{ stroke: positionColor.get(p), fill: sounding.has(p) ? playColor + '44' : undefined }"
         />
         <text :x="pt(p)[0]" :y="pt(p)[1]">{{ noteName(pc) }}</text>
         <text class="pos-label" :x="pt(p, R + 26)[0]" :y="pt(p, R + 26)[1]">{{ positionLabel(p) }}</text>

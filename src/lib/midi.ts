@@ -1,6 +1,6 @@
-import { STEPS, midiOf } from './music'
-import type { Instrument, ProjectData, ShapeRef } from './project'
-import type { ShapeState } from './rhythm'
+import { midiOf, type ShapeRef } from './music'
+import type { Instrument, ProjectData } from './project'
+import { meterOf, type ShapeState } from './rhythm'
 
 /** General MIDI programs (0-based) used when exporting. */
 export const GM_PROGRAM: Record<Instrument, number> = {
@@ -19,6 +19,12 @@ export interface MidiNote {
   midi: number
 }
 
+/** A time signature change, from the bar length in sixteenths. */
+export interface MidiMeter {
+  tick: number
+  steps: number
+}
+
 /** Variable-length quantity, as used for delta times. */
 export function vlq(n: number): number[] {
   const out = [n & 0x7f]
@@ -33,26 +39,36 @@ export function vlq(n: number): number[] {
 const u32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]
 
 /** Builds a Standard MIDI File, format 0, one track on channel 1. */
-export function buildMidi(notes: MidiNote[], bpm: number, program: number, name: string): Uint8Array {
-  const events: { t: number; on: boolean; midi: number }[] = []
-  for (const n of notes) {
-    events.push({ t: n.tick, on: true, midi: n.midi })
-    events.push({ t: n.tick + n.duration, on: false, midi: n.midi })
+export function buildMidi(
+  notes: MidiNote[],
+  bpm: number,
+  program: number,
+  name: string,
+  meters: MidiMeter[] = [{ tick: 0, steps: 16 }],
+): Uint8Array {
+  // order at equal ticks: time signature, then note-off, then note-on (so repeated notes are not cut)
+  type Ev = { t: number; rank: number; bytes: number[] }
+  const events: Ev[] = []
+  for (const m of meters) {
+    const { numerator, denominator } = meterOf(m.steps)
+    events.push({ t: m.tick, rank: 0, bytes: [0xff, 0x58, 4, numerator, Math.log2(denominator), 24, 8] })
   }
-  // note-off before note-on at the same tick, so repeated notes are not cut
-  events.sort((a, b) => a.t - b.t || Number(a.on) - Number(b.on))
+  for (const n of notes) {
+    events.push({ t: n.tick, rank: 2, bytes: [0x90, n.midi & 0x7f, 96] })
+    events.push({ t: n.tick + n.duration, rank: 1, bytes: [0x80, n.midi & 0x7f, 0] })
+  }
+  events.sort((a, b) => a.t - b.t || a.rank - b.rank)
 
   const usPerQuarter = Math.round(60e6 / bpm)
   const nameBytes = [...new TextEncoder().encode(name)]
   const track = [
     0, 0xff, 0x03, ...vlq(nameBytes.length), ...nameBytes,
     0, 0xff, 0x51, 3, (usPerQuarter >> 16) & 255, (usPerQuarter >> 8) & 255, usPerQuarter & 255,
-    0, 0xff, 0x58, 4, 4, 2, 24, 8,
     0, 0xc0, program & 0x7f,
   ]
   let last = 0
   for (const e of events) {
-    track.push(...vlq(e.t - last), e.on ? 0x90 : 0x80, e.midi & 0x7f, e.on ? 96 : 0)
+    track.push(...vlq(e.t - last), ...e.bytes)
     last = e.t
   }
   track.push(0, 0xff, 0x2f, 0)
@@ -63,24 +79,29 @@ export function buildMidi(notes: MidiNote[], bpm: number, program: number, name:
   ])
 }
 
-/** Notes of a sequence of bars, one bar per shape reference. */
-export function sequenceToNotes(
+/** Notes and time signatures of a sequence of bars, one bar per shape reference. */
+export function sequenceToMidi(
   project: Pick<ProjectData, 'row'>,
   sequence: ShapeRef[],
   getShape: (ref: ShapeRef) => ShapeState,
-): MidiNote[] {
+): { notes: MidiNote[]; meters: MidiMeter[] } {
   const notes: MidiNote[] = []
-  sequence.forEach((ref, bar) => {
+  const meters: MidiMeter[] = []
+  let barStart = 0
+  for (const ref of sequence) {
     const shape = getShape(ref)
+    const tick = barStart * TICKS_PER_STEP
+    if (meters[meters.length - 1]?.steps !== shape.steps) meters.push({ tick, steps: shape.steps })
     shape.notes.forEach((n, i) => {
       const pos = shape.order[i]
       if (!n || pos === undefined) return
       notes.push({
-        tick: (bar * STEPS + n.start) * TICKS_PER_STEP,
+        tick: (barStart + n.start) * TICKS_PER_STEP,
         duration: n.length * TICKS_PER_STEP,
         midi: midiOf(project.row[pos]!, n.octave),
       })
     })
-  })
-  return notes
+    barStart += shape.steps
+  }
+  return { notes, meters }
 }

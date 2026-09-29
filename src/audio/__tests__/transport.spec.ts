@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { CIRCLE_OF_FIFTHS } from '@/lib/music'
-import type { ShapeRef } from '@/lib/project'
+import { CIRCLE_OF_FIFTHS, shapeKey, type ShapeRef } from '@/lib/music'
 import { defaultShape, type ShapeState } from '@/lib/rhythm'
 import { Transport, type PlayPosition } from '../transport'
+
+const SQUARE_A: ShapeRef = { kind: 'nth', split: 3, group: 0 }
+const TRIANGLE_B: ShapeRef = { kind: 'nth', split: 4, group: 1 }
 
 /** Transport driven by a fake clock: timers and frames only run when the test says so. */
 function setup(opts: { bpm?: number; loop?: boolean; metronome?: boolean; sequence?: ShapeRef[]; shapes?: Record<string, ShapeState> } = {}) {
@@ -11,12 +13,12 @@ function setup(opts: { bpm?: number; loop?: boolean; metronome?: boolean; sequen
   const clicks: { time: number; accent: boolean }[] = []
   const positions: (PlayPosition | null)[] = []
   let ended = 0
-  const sequence = opts.sequence ?? [{ split: 3, group: 0 }]
+  const sequence = opts.sequence ?? [SQUARE_A]
   const t = new Transport(
     {
       now: () => now,
       sequence: () => sequence,
-      shape: (r) => opts.shapes?.[`${r.split}:${r.group}`] ?? defaultShape(r.split, r.group),
+      shape: (r) => opts.shapes?.[shapeKey(r)] ?? defaultShape(r),
       row: () => CIRCLE_OF_FIFTHS,
       bpm: () => opts.bpm ?? 120,
       loop: () => opts.loop ?? true,
@@ -34,7 +36,8 @@ function setup(opts: { bpm?: number; loop?: boolean; metronome?: boolean; sequen
     t.schedule()
     t.frame()
   }
-  return { t, notes, clicks, positions, advance, ended: () => ended, start: 10.06 }
+  const last = () => positions[positions.length - 1]
+  return { t, notes, clicks, positions, advance, last, ended: () => ended, start: 10.06 }
 }
 
 describe('Transport', () => {
@@ -54,14 +57,15 @@ describe('Transport', () => {
     const s = setup()
     s.t.start()
     s.advance(0.06 + 0.125 * 5 + 0.0625) // middle of step 6
-    const p = s.positions[s.positions.length - 1]!
+    const p = s.last()!
     expect(p.step).toBe(5)
     expect(p.bar).toBe(0)
+    expect(p.steps).toBe(16)
     expect(p.frac).toBeCloseTo(0.5)
   })
 
   it('plays bars one after the other and loops', () => {
-    const s = setup({ sequence: [{ split: 3, group: 0 }, { split: 4, group: 1 }] })
+    const s = setup({ sequence: [SQUARE_A, TRIANGLE_B] })
     s.t.start()
     for (let i = 0; i < 45; i++) s.advance(0.1) // 4.5 s = 2 bars + a bit
     const bar2 = s.notes.filter((n) => n.time >= s.start + 2 - 1e-9 && n.time < s.start + 4 - 1e-9)
@@ -71,6 +75,18 @@ describe('Transport', () => {
     expect(bar3[0]!.midi).toBe(60)
   })
 
+  it('gives each bar the length of its shape', () => {
+    const long: ShapeState = { ...defaultShape(SQUARE_A), steps: 20, notes: [{ start: 19, length: 1, octave: 4 }, null, null, null] }
+    const s = setup({ sequence: [SQUARE_A, TRIANGLE_B], shapes: { [shapeKey(SQUARE_A)]: long }, loop: false })
+    s.t.start()
+    for (let i = 0; i < 60; i++) s.advance(0.1)
+    // bar 1 lasts 20 steps (2.5 s): its note is on step 20, and bar 2 starts right after
+    expect(s.notes[0]!.time).toBeCloseTo(s.start + 19 * 0.125)
+    expect(s.notes[1]!.time).toBeCloseTo(s.start + 20 * 0.125)
+    expect(s.notes).toHaveLength(4)
+    expect(s.ended()).toBe(1)
+  })
+
   it('stops at the end without loop', () => {
     const s = setup({ loop: false })
     s.t.start()
@@ -78,11 +94,11 @@ describe('Transport', () => {
     expect(s.notes).toHaveLength(4)
     expect(s.ended()).toBe(1)
     expect(s.t.playing).toBe(false)
-    expect(s.positions[s.positions.length - 1]).toBeNull()
+    expect(s.last()).toBeNull()
   })
 
   it('plays rests as silence and honours custom order and octave', () => {
-    const shapes = { '3:0': { order: [9, 0, 3, 6], notes: [{ start: 2, length: 1, octave: 5 }, null, null, null] } }
+    const shapes = { [shapeKey(SQUARE_A)]: { steps: 16, order: [9, 0, 3, 6], notes: [{ start: 2, length: 1, octave: 5 }, null, null, null] } }
     const s = setup({ shapes })
     s.t.start()
     for (let i = 0; i < 18; i++) s.advance(0.1)

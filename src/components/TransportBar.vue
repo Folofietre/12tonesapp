@@ -12,6 +12,8 @@ const beat = computed(() => {
   const p = playback.position
   return p && p.frac < 0.6 ? Math.floor(p.step / BEAT) : -1
 })
+/** One dot per beat of the current bar (a partial last beat counts as one). */
+const beatCount = computed(() => Math.ceil((playback.position?.steps ?? project.selectedShape.steps) / BEAT))
 const positionText = computed(() => {
   const p = playback.position
   return p ? `bar ${p.bar + 1} . step ${p.step + 1}` : 'stopped'
@@ -58,7 +60,7 @@ function onInstrument(e: Event) {
         Click
       </button>
       <div class="beats" aria-hidden="true">
-        <i v-for="k in 4" :key="k" :class="{ on: beat === k - 1, down: k === 1 }" />
+        <i v-for="k in beatCount" :key="k" :class="{ on: beat === k - 1, down: k === 1 }" />
       </div>
       <div class="pos">{{ positionText }}</div>
     </div>
@@ -75,7 +77,7 @@ function onInstrument(e: Event) {
 .brand { font-family: var(--mono); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; font-size: 13px; }
 .brand span { color: var(--accent); }
 .controls { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap; }
-.beats { display: flex; gap: 6px; }
+.beats { display: flex; gap: 5px; flex-wrap: wrap; max-width: 180px; }
 .beats i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-2); }
 .beats i.on { background: var(--accent); box-shadow: 0 0 10px var(--accent); transform: scale(1.3); }
 .beats i.on.down { background: #ffd25c; box-shadow: 0 0 10px #ffd25c; }
