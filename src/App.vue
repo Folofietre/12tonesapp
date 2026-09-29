@@ -27,10 +27,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 <template>
   <TransportBar />
   <main class="layout">
+    <ArrangementPanel />
     <ToneCircle />
     <ShapePanel />
     <RhythmEditor />
-    <ArrangementPanel />
   </main>
   <footer class="app-footer">
     Twelve Tone Shapes {{ version }}. Based on Ron Jarzombek's 12-tone circle.
